@@ -178,16 +178,15 @@
 #define MSM_RAM_CONSOLE_SIZE    (128 * SZ_1K)
 #endif
 
-#define MSM_PMEM_SF_SIZE	0x500000
+#define MSM_PMEM_SF_SIZE	0x1300000
 #ifdef CONFIG_FB_MSM_HDMI_SII9024A_PANEL
 #define MSM_FB_SIZE             0x530000
 #else
 #define MSM_FB_SIZE		0x500000
 #endif /* CONFIG_FB_MSM_HDMI_SII9024A_PANEL */
 #define MSM_GPU_PHYS_SIZE       SZ_2M
-#define MSM_PMEM_CAMERA_SIZE    0x3200000
-#define MSM_PMEM_ADSP_SIZE      0x1800000
-#define MSM_PMEM_SWIQI_SIZE     0xE00000
+#define MSM_PMEM_CAMERA_SIZE    0x0000000
+#define MSM_PMEM_ADSP_SIZE      0x2F00000
 #define PMEM_KERNEL_EBI1_SIZE   0x600000
 #define MSM_PMEM_AUDIO_SIZE     0x200000
 
@@ -3514,12 +3513,6 @@ static struct android_pmem_platform_data android_pmem_adsp_cached_pdata = {
 	.cached = 1,
 };
 
-static struct android_pmem_platform_data android_pmem_swiqi_pdata = {
-	.name = "pmem_swiqi",
-	.allocator_type = PMEM_ALLOCATORTYPE_BITMAP,
-	.cached = 1,
-};
-
 static struct android_pmem_platform_data android_pmem_camera_pdata = {
 	.name = "pmem_camera",
 	.allocator_type = PMEM_ALLOCATORTYPE_BITMAP,
@@ -3548,11 +3541,6 @@ static struct platform_device android_pmem_adsp_cached_device = {
 	.name = "android_pmem",
 	.id = 5,
 	.dev = {.platform_data = &android_pmem_adsp_cached_pdata},
-};
-static struct platform_device android_pmem_swiqi_device = {
-	.name = "android_pmem",
-	.id = 6,
-	.dev = {.platform_data = &android_pmem_swiqi_pdata},
 };
 
 static struct platform_device android_pmem_camera_device = {
@@ -3930,7 +3918,6 @@ static struct platform_device *devices[] __initdata = {
 	&android_pmem_kernel_ebi1_device,
 	&android_pmem_adsp_device,
 	&android_pmem_adsp_cached_device,
-	&android_pmem_swiqi_device,
 	&android_pmem_camera_device,
 	&android_pmem_audio_device,
 	&msm_device_i2c,
@@ -4662,14 +4649,6 @@ static void __init pmem_adsp_size_setup(char **p)
 
 __early_param("pmem_adsp_size=", pmem_adsp_size_setup);
 
-static unsigned pmem_swiqi_size = MSM_PMEM_SWIQI_SIZE;
-static void __init pmem_swiqi_size_setup(char **p)
-{
-	pmem_swiqi_size = memparse(*p, p);
-}
-
-__early_param("pmem_swiqi_size=", pmem_swiqi_size_setup);
-
 static unsigned pmem_camera_size = MSM_PMEM_CAMERA_SIZE;
 static void __init pmem_camera_size_setup(char **p)
 {
@@ -4736,16 +4715,6 @@ static void __init msm7x30_allocate_memory_regions(void)
 		android_pmem_adsp_cached_pdata.start = __pa(addr);
 		android_pmem_adsp_cached_pdata.size = size;
 		pr_info("setting %lu bytes at %p (%lx physical) for adsp cached "
-			"pmem arena\n", size, addr, __pa(addr));
-	}
-
-	size = pmem_swiqi_size;
-
-	if (size) {
-		addr = alloc_bootmem(size);
-		android_pmem_swiqi_pdata.start = __pa(addr);
-		android_pmem_swiqi_pdata.size = size;
-		pr_info("allocating %lu bytes at %p (%lx physical) for swiqi "
 			"pmem arena\n", size, addr, __pa(addr));
 	}
 
