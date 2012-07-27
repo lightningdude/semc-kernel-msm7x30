@@ -919,7 +919,7 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 24;
+		var->transp.offset = 0;
 		var->transp.length = 0;
 		bpp = 3;
 		break;
@@ -929,16 +929,16 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		fix->xpanstep = 1;
 		fix->ypanstep = 1;
 		var->vmode = FB_VMODE_NONINTERLACED;
-		var->blue.offset = 24;
-		var->green.offset = 16;
-		var->red.offset = 8;
+		var->blue.offset = 0;
+		var->green.offset = 8;
+		var->red.offset = 16;
 		var->blue.length = 8;
 		var->green.length = 8;
 		var->red.length = 8;
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 0;
+		var->transp.offset = 24;
 		var->transp.length = 8;
 		bpp = 4;
 		break;
@@ -948,16 +948,16 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		fix->xpanstep = 1;
 		fix->ypanstep = 1;
 		var->vmode = FB_VMODE_NONINTERLACED;
-		var->blue.offset = 16;
-		var->green.offset = 8;
-		var->red.offset = 0;
+		var->blue.offset = 8;
+		var->green.offset = 16;
+		var->red.offset = 24;
 		var->blue.length = 8;
 		var->green.length = 8;
 		var->red.length = 8;
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 24;
+		var->transp.offset = 0;
 		var->transp.length = 8;
 		bpp = 4;
 		break;
@@ -1321,12 +1321,17 @@ DECLARE_MUTEX(msm_fb_pan_sem);
 static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
-	struct mdp_dirty_region dirty;
+struct mdp_dirty_region dirty;
 	struct mdp_dirty_region *dirtyPtr = NULL;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	struct msm_fb_panel_data *pdata =
 		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
-
+	if (info->node == 1 || info->node == 2) {
+                pr_err("%s: no pan display for fb%d!",
+                       __func__, info->node);
+                return -EPERM;
+        }
+ 
 	if ((!mfd->op_enable) || (!mfd->panel_power_on))
 		return -EPERM;
 
@@ -1401,11 +1406,13 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 
+	printk(KERN_WARNING "FB_ROTATE_UR");	
 	if (var->rotate != FB_ROTATE_UR)
 		return -EINVAL;
+	
+	printk(KERN_WARNING "grayscale");
 	if (var->grayscale != info->var.grayscale)
 		return -EINVAL;
-
 	switch (var->bits_per_pixel) {
 	case 16:
 		if ((var->green.offset != 5) ||
@@ -1445,29 +1452,38 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 		/* Figure out if the user meant RGBA or ARGB
 		   and verify the position of the RGB components */
 
+		printk(KERN_WARNING,"case 32");
+
 		if (var->transp.offset == 24) {
-			if ((var->blue.offset != 16) ||
+		printk(KERN_WARNING "offset 24");
+			if ((var->blue.offset != 0) ||
 			    (var->green.offset != 8) ||
-			    (var->red.offset != 0))
-				return -EINVAL;
+			    (var->red.offset != 16)){
+				printk(KERN_WARNING "1");
+				return -EINVAL;}
 		} else if (var->transp.offset == 0) {
-			if ((var->blue.offset != 24) ||
+			printk(KERN_WARNING "offset 0");
+			if ((var->blue.offset != 8) ||
 			    (var->green.offset != 16) ||
-			    (var->red.offset != 8))
-				return -EINVAL;
-		} else
-			return -EINVAL;
+			    (var->red.offset != 24)){
+				printk(KERN_WARNING "2");
+				return -EINVAL;}
+		} else{
+			printk(KERN_WARNING "first else");
+			return -EINVAL;}
 
 		/* Check the common values for both RGBA and ARGB */
-
+		
+		printk(KERN_WARNING "checking common");
 		if ((var->blue.length != 8) ||
 		    (var->green.length != 8) ||
 		    (var->red.length != 8) ||
 		    (var->transp.length != 8) ||
 		    (var->blue.msb_right != 0) ||
 		    (var->green.msb_right != 0) ||
-		    (var->red.msb_right != 0))
-			return -EINVAL;
+		    (var->red.msb_right != 0)){
+			printk(KERN_WARNING "common failed");
+			return -EINVAL;}
 
 		break;
 
@@ -1476,25 +1492,35 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	}
 
 	if ((var->xres_virtual <= 0) || (var->yres_virtual <= 0))
-		return -EINVAL;
+		{printk(KERN_WARNING "3");
+		return -EINVAL;}
 
 	if (info->fix.smem_len <
 		(var->xres_virtual*var->yres_virtual*(var->bits_per_pixel/8)))
-		return -EINVAL;
+		{printk(KERN_WARNING "4");
+		return -EINVAL;}
 
 	if ((var->xres == 0) || (var->yres == 0))
-		return -EINVAL;
+		{printk(KERN_WARNING "5");
+		return -EINVAL;}
 
 	if ((var->xres > mfd->panel_info.xres) ||
 		(var->yres > mfd->panel_info.yres))
-		return -EINVAL;
+		{printk(KERN_WARNING "6");
+		return -EINVAL;}
 
 	if (var->xoffset > (var->xres_virtual - var->xres))
-		return -EINVAL;
+		{printk(KERN_WARNING "7");
+		return -EINVAL;}
 
-	if (var->yoffset > (var->yres_virtual - var->yres))
-		return -EINVAL;
+	/*if (var->yoffset > (var->yres_virtual - var->yres))
+		{printk(KERN_WARNING "8");
+		printk(KERN_WARNING "yoffset: %u",var->yoffset);
+		printk(KERN_WARNING "virtual: %u",var->yres_virtual);
+		printk(KERN_WARNING "yres: %u",var->yres);
+		return -EINVAL;}*/
 
+	printk(KERN_WARNING "return 0");
 	return 0;
 }
 
@@ -1525,7 +1551,7 @@ static int msm_fb_set_par(struct fb_info *info)
 		break;
 
 	case 32:
-		if (var->transp.offset == 0)
+		if (var->transp.offset == 24)
 			mfd->fb_imgType = MDP_ARGB_8888;
 		else
 			mfd->fb_imgType = MDP_RGBA_8888;
