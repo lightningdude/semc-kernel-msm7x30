@@ -919,7 +919,7 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 24;
+		var->transp.offset = 0;
 		var->transp.length = 0;
 		bpp = 3;
 		break;
