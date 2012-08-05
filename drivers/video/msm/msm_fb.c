@@ -687,27 +687,32 @@ static int msm_fb_blank_sub(int blank_mode, struct fb_info *info,
 
 int calc_fb_offset(struct msm_fb_data_type *mfd, struct fb_info *fbi, int bpp)
 {
-        struct msm_panel_info *panel_info = &mfd->panel_info;
-        int remainder, yres, offset;
+	struct msm_panel_info *panel_info = &mfd->panel_info;
+	int remainder, yres, offset;
 
-        yres = panel_info->yres;
-        remainder = (fbi->fix.line_length*yres) & (PAGE_SIZE - 1);
+	if (panel_info->mode2_yres != 0) {
+		yres = panel_info->mode2_yres;
+		remainder = (fbi->fix.line_length*yres) & (PAGE_SIZE - 1);
+	} else {
+		yres = panel_info->yres;
+		remainder = (fbi->fix.line_length*yres) & (PAGE_SIZE - 1);
+	}
 
-        if (!remainder)
-                remainder = PAGE_SIZE;
+	if (!remainder)
+		remainder = PAGE_SIZE;
 
-        if (fbi->var.yoffset < yres) {
-                offset = (fbi->var.xoffset * bpp);
-                                /* iBuf->buf += fbi->var.xoffset * bpp + 0 *
-                                yres * fbi->fix.line_length; */
-        } else if (fbi->var.yoffset >= yres && fbi->var.yoffset < 2 * yres) {
-                offset = (fbi->var.xoffset * bpp + yres *
-                fbi->fix.line_length + PAGE_SIZE - remainder);
-        } else {
-                offset = (fbi->var.xoffset * bpp + 2 * yres *
-                fbi->fix.line_length + 2 * (PAGE_SIZE - remainder));
-        }
-        return offset;
+	if (fbi->var.yoffset < yres) {
+		offset = (fbi->var.xoffset * bpp);
+				/* iBuf->buf +=	fbi->var.xoffset * bpp + 0 *
+				yres * fbi->fix.line_length; */
+	} else if (fbi->var.yoffset >= yres && fbi->var.yoffset < 2 * yres) {
+		offset = (fbi->var.xoffset * bpp + yres *
+		fbi->fix.line_length + PAGE_SIZE - remainder);
+	} else {
+		offset = (fbi->var.xoffset * bpp + 2 * yres *
+		fbi->fix.line_length + 2 * (PAGE_SIZE - remainder));
+	}
+	return offset;
 }
 
 static void msm_fb_fillrect(struct fb_info *info,
@@ -863,6 +868,19 @@ static struct fb_ops msm_fb_ops = {
 	.fb_mmap = msm_fb_mmap,
 };
 
+static __u32 msm_fb_line_length(__u32 fb_index, __u32 xres, int bpp)
+{
+	/* The adreno GPU hardware requires that the pitch be aligned to
+	   32 pixels for color buffers, so for the cases where the GPU
+	   is writing directly to fb0, the framebuffer pitch
+	   also needs to be 32 pixel aligned */
+
+	if (fb_index == 0)
+		return ALIGN(xres, 32) * bpp;
+	else
+		return xres * bpp;
+}
+
 static int msm_fb_register(struct msm_fb_data_type *mfd)
 {
 	int ret = -ENODEV;
@@ -873,6 +891,7 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	struct fb_var_screeninfo *var;
 	int *id;
 	int fbram_offset;
+	int remainder, remainder_mode2;
 
 	/*
 	 * fb info initialization
@@ -954,16 +973,16 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		fix->xpanstep = 1;
 		fix->ypanstep = 1;
 		var->vmode = FB_VMODE_NONINTERLACED;
-		var->blue.offset = 0;
-		var->green.offset = 8;
-		var->red.offset = 16;
+		var->blue.offset = 24;
+		var->green.offset = 16;
+		var->red.offset = 8;
 		var->blue.length = 8;
 		var->green.length = 8;
 		var->red.length = 8;
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 24;
+		var->transp.offset = 0;
 		var->transp.length = 8;
 		bpp = 4;
 		break;
@@ -973,16 +992,16 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		fix->xpanstep = 1;
 		fix->ypanstep = 1;
 		var->vmode = FB_VMODE_NONINTERLACED;
-		var->blue.offset = 8;
-		var->green.offset = 16;
-		var->red.offset = 24;
+		var->blue.offset = 16;
+		var->green.offset = 8;
+		var->red.offset = 0;
 		var->blue.length = 8;
 		var->green.length = 8;
 		var->red.length = 8;
 		var->blue.msb_right = 0;
 		var->green.msb_right = 0;
 		var->red.msb_right = 0;
-		var->transp.offset = 0;
+		var->transp.offset = 24;
 		var->transp.length = 8;
 		bpp = 4;
 		break;
@@ -1016,19 +1035,50 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 		return ret;
 	}
 
-	/* The adreno GPU hardware requires that the pitch be aligned to
-	   32 pixels for color buffers, so for the cases where the GPU
-	   is writing directly to fb0, the framebuffer pitch
-	   also needs to be 32 pixel aligned */
+	fix->line_length = msm_fb_line_length(mfd->index, panel_info->xres,
+					      bpp);
 
+	/* Make sure all buffers can be addressed on a page boundary by an x
+	 * and y offset */
+
+	remainder = (fix->line_length * panel_info->yres) & (PAGE_SIZE - 1);
+					/* PAGE_SIZE is a power of 2 */
+	if (!remainder)
+		remainder = PAGE_SIZE;
+	remainder_mode2 = (fix->line_length *
+				panel_info->mode2_yres) & (PAGE_SIZE - 1);
+	if (!remainder_mode2)
+		remainder_mode2 = PAGE_SIZE;
+
+	/* calculate smem_len based on max size of two supplied modes */
+	fix->smem_len = MAX((msm_fb_line_length(mfd->index, panel_info->xres,
+					      bpp) *
+			    panel_info->yres + PAGE_SIZE -
+				remainder) * mfd->fb_page,
+			    (msm_fb_line_length(mfd->index,
+					       panel_info->mode2_xres,
+					       bpp) *
+			    panel_info->mode2_yres + PAGE_SIZE -
+				remainder_mode2) * mfd->fb_page);
+
+	/*
+	 * calculate smem_len based on max size of two supplied modes.
+	 * Only fb0 has mem. fb1 and fb2 don't have mem.
+	 */
 	if (mfd->index == 0)
-		fix->line_length = ALIGN(panel_info->xres, 32) * bpp;
-	else
-		fix->line_length = panel_info->xres * bpp;
-
-	fix->smem_len = fix->line_length * panel_info->yres * mfd->fb_page;
-
-	fix->smem_len += 128 * 1024;
+		fix->smem_len = roundup(MAX(msm_fb_line_length(mfd->index,
+							panel_info->xres,
+							bpp) *
+				     panel_info->yres * mfd->fb_page,
+				    msm_fb_line_length(mfd->index,
+							panel_info->mode2_xres,
+							bpp) *
+				      panel_info->mode2_yres * mfd->fb_page), PAGE_SIZE);
+	else if (mfd->index == 1 || mfd->index == 2) {
+		pr_debug("%s:%d no memory is allocated for fb%d!\n",
+			__func__, __LINE__, mfd->index);
+		fix->smem_len = 0;
+	}
 
 	mfd->var_xres = panel_info->xres;
 	mfd->var_yres = panel_info->yres;
@@ -1089,15 +1139,17 @@ static int msm_fb_register(struct msm_fb_data_type *mfd)
 	fbram_phys += fbram_offset;
 	fbram_size -= fbram_offset;
 
-	if (fbram_size < fix->smem_len) {
-		printk(KERN_ERR "error: no more framebuffer memory!\n");
-		return -ENOMEM;
-	}
+	if (mfd->index == 0)
+		if (fbram_size < fix->smem_len) {
+			pr_err("error: no more framebuffer memory!\n");
+			return -ENOMEM;
+		}
 
 	fbi->screen_base = fbram;
 	fbi->fix.smem_start = (unsigned long)fbram_phys;
 
-	memset(fbi->screen_base, 0x0, fix->smem_len);
+	if (mfd->index == 0)
+		memset(fbi->screen_base, 0x0, fix->smem_len);
 
 	mfd->op_enable = TRUE;
 	mfd->panel_power_on = FALSE;
@@ -1303,7 +1355,11 @@ static int msm_fb_open(struct fb_info *info, int user)
 
 
 	if (!mfd->ref_cnt) {
-		mdp_set_dma_pan_info(info, NULL, TRUE);
+		if ((info->node != 1) && (info->node != 2)) {
+			mdp_set_dma_pan_info(info, NULL, TRUE);
+		} else
+			pr_debug("%s:%d no mdp_set_dma_pan_info %d\n",
+				__func__, __LINE__, info->node);
 
 		if (msm_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable)) {
 			printk(KERN_ERR "msm_fb_open: can't turn on display!\n");
@@ -1346,19 +1402,24 @@ DECLARE_MUTEX(msm_fb_pan_sem);
 static int msm_fb_pan_display(struct fb_var_screeninfo *var,
 			      struct fb_info *info)
 {
-struct mdp_dirty_region dirty;
+	struct mdp_dirty_region dirty;
 	struct mdp_dirty_region *dirtyPtr = NULL;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
 	struct msm_fb_panel_data *pdata =
 		(struct msm_fb_panel_data *)mfd->pdev->dev.platform_data;
+
+	/*
+	 * If framebuffer is 1 or 2, io pen display is not allowed.
+	 */
 	if (info->node == 1 || info->node == 2) {
-                pr_err("%s: no pan display for fb%d!",
-                       __func__, info->node);
-                return -EPERM;
-        }
- 
-	if ((!mfd->op_enable) || (!mfd->panel_power_on))
+		pr_err("%s: no pan display for fb%d!",
+		       __func__, info->node);
 		return -EPERM;
+	}
+
+	if (info->node != 0)	/* primary */
+		if ((!mfd->op_enable) || (!mfd->panel_power_on))
+			return -EPERM;
 
 	if (var->xoffset > (info->var.xres_virtual - info->var.xres))
 		return -EINVAL;
@@ -1376,6 +1437,7 @@ struct mdp_dirty_region dirty;
 
 	/* "UPDT" */
 	if (var->reserved[0] == 0x54445055) {
+
 		dirty.xoffset = var->reserved[1] & 0xffff;
 		dirty.yoffset = (var->reserved[1] >> 16) & 0xffff;
 
@@ -1430,14 +1492,13 @@ struct mdp_dirty_region dirty;
 static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
+	int hole_offset;
 
-	printk(KERN_WARNING "FB_ROTATE_UR");	
 	if (var->rotate != FB_ROTATE_UR)
 		return -EINVAL;
-	
-	printk(KERN_WARNING "grayscale");
 	if (var->grayscale != info->var.grayscale)
 		return -EINVAL;
+
 	switch (var->bits_per_pixel) {
 	case 16:
 		if ((var->green.offset != 5) ||
@@ -1477,38 +1538,29 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 		/* Figure out if the user meant RGBA or ARGB
 		   and verify the position of the RGB components */
 
-		printk(KERN_WARNING,"case 32");
-
 		if (var->transp.offset == 24) {
-		printk(KERN_WARNING "offset 24");
-			if ((var->blue.offset != 0) ||
+			if ((var->blue.offset != 16) ||
 			    (var->green.offset != 8) ||
-			    (var->red.offset != 16)){
-				printk(KERN_WARNING "1");
-				return -EINVAL;}
+			    (var->red.offset != 0))
+				return -EINVAL;
 		} else if (var->transp.offset == 0) {
-			printk(KERN_WARNING "offset 0");
-			if ((var->blue.offset != 8) ||
+			if ((var->blue.offset != 24) ||
 			    (var->green.offset != 16) ||
-			    (var->red.offset != 24)){
-				printk(KERN_WARNING "2");
-				return -EINVAL;}
-		} else{
-			printk(KERN_WARNING "first else");
-			return -EINVAL;}
+			    (var->red.offset != 8))
+				return -EINVAL;
+		} else
+			return -EINVAL;
 
 		/* Check the common values for both RGBA and ARGB */
-		
-		printk(KERN_WARNING "checking common");
+
 		if ((var->blue.length != 8) ||
 		    (var->green.length != 8) ||
 		    (var->red.length != 8) ||
 		    (var->transp.length != 8) ||
 		    (var->blue.msb_right != 0) ||
 		    (var->green.msb_right != 0) ||
-		    (var->red.msb_right != 0)){
-			printk(KERN_WARNING "common failed");
-			return -EINVAL;}
+		    (var->red.msb_right != 0))
+			return -EINVAL;
 
 		break;
 
@@ -1517,35 +1569,43 @@ static int msm_fb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	}
 
 	if ((var->xres_virtual <= 0) || (var->yres_virtual <= 0))
-		{printk(KERN_WARNING "3");
-		return -EINVAL;}
+		return -EINVAL;
 
-	if (info->fix.smem_len <
-		(var->xres_virtual*var->yres_virtual*(var->bits_per_pixel/8)))
-		{printk(KERN_WARNING "4");
-		return -EINVAL;}
+	if ((info->node != 1) && (info->node != 2))
+		if (info->fix.smem_len <
+		    (var->xres_virtual*
+		     var->yres_virtual*
+		     (var->bits_per_pixel/8)))
+			return -EINVAL;
 
 	if ((var->xres == 0) || (var->yres == 0))
-		{printk(KERN_WARNING "5");
-		return -EINVAL;}
+		return -EINVAL;
 
-	if ((var->xres > mfd->panel_info.xres) ||
-		(var->yres > mfd->panel_info.yres))
-		{printk(KERN_WARNING "6");
-		return -EINVAL;}
+	if ((var->xres > MAX(mfd->panel_info.xres,
+			     mfd->panel_info.mode2_xres)) ||
+		(var->yres > MAX(mfd->panel_info.yres,
+				 mfd->panel_info.mode2_yres)))
+		return -EINVAL;
 
 	if (var->xoffset > (var->xres_virtual - var->xres))
-		{printk(KERN_WARNING "7");
-		return -EINVAL;}
+		return -EINVAL;
 
-	/*if (var->yoffset > (var->yres_virtual - var->yres))
-		{printk(KERN_WARNING "8");
-		printk(KERN_WARNING "yoffset: %u",var->yoffset);
-		printk(KERN_WARNING "virtual: %u",var->yres_virtual);
-		printk(KERN_WARNING "yres: %u",var->yres);
-		return -EINVAL;}*/
+	if (!mfd->panel_info.mode2_yres)
+		hole_offset = (mfd->fbi->fix.line_length *
+			mfd->panel_info.yres) % PAGE_SIZE;
+	else
+		hole_offset = (mfd->fbi->fix.line_length *
+			mfd->panel_info.mode2_yres) % PAGE_SIZE;
 
-	printk(KERN_WARNING "return 0");
+	if (!hole_offset) {
+		hole_offset = PAGE_SIZE - hole_offset;
+		hole_offset = hole_offset/mfd->fbi->fix.line_length;
+	}
+
+	if (var->yoffset > (var->yres_virtual - var->yres + (hole_offset *
+							(mfd->fb_page - 1))))
+		return -EINVAL;
+
 	return 0;
 }
 
@@ -1576,7 +1636,7 @@ static int msm_fb_set_par(struct fb_info *info)
 		break;
 
 	case 32:
-		if (var->transp.offset == 24)
+		if (var->transp.offset == 0)
 			mfd->fb_imgType = MDP_ARGB_8888;
 		else
 			mfd->fb_imgType = MDP_RGBA_8888;
@@ -1596,6 +1656,8 @@ static int msm_fb_set_par(struct fb_info *info)
 		mfd->var_pixclock = var->pixclock;
 		blank = 1;
 	}
+	mfd->fbi->fix.line_length = msm_fb_line_length(mfd->index, var->xres,
+						       var->bits_per_pixel/8);
 
 	if (blank) {
 		msm_fb_blank_sub(FB_BLANK_POWERDOWN, info, mfd->op_enable);
@@ -2000,6 +2062,8 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 
 		/* blit first region */
 		if (((splitreq.flags & 0x07) == 0x07) ||
+			((splitreq.flags & 0x07) == 0x05) ||
+			((splitreq.flags & 0x07) == 0x02) ||
 			((splitreq.flags & 0x07) == 0x0)) {
 
 			if (splitreq.flags & MDP_ROT_90) {
@@ -2080,6 +2144,8 @@ int mdp_blit(struct fb_info *info, struct mdp_blit_req *req)
 
 		/* blit second region */
 		if (((splitreq.flags & 0x07) == 0x07) ||
+			((splitreq.flags & 0x07) == 0x05) ||
+			((splitreq.flags & 0x07) == 0x02) ||
 			((splitreq.flags & 0x07) == 0x0)) {
 			splitreq.src_rect.h = s_h_1;
 			splitreq.src_rect.y = s_y_1;
@@ -2353,7 +2419,11 @@ static int msmfb_blit(struct fb_info *info, void __user *p)
 	struct mdp_blit_req_list req_list_header;
 
 	int count, i, req_list_count;
-
+	if (info->node == 1 || info->node == 2) {
+		pr_err("%s: no pan display for fb%d.",
+		       __func__, info->node);
+		return -EPERM;
+	}
 	/* Get the count size for the total BLIT request. */
 	if (copy_from_user(&req_list_header, p, sizeof(req_list_header)))
 		return -EFAULT;
